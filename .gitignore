@@ -1,0 +1,11 @@
+# 数据库文件 (绝对不能上传)
+*.db
+*.sqlite
+data.db
+
+# 编译生成的可执行文件 (Windows 环境)
+*.exe
+
+# 依赖包目录与临时文件
+/vendor/
+.DS_Store
