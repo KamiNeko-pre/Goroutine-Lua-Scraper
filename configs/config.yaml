@@ -1,9 +1,12 @@
 app:
     port: 8080
     lua_path: "./scripts/test.lua"
-    proxy: "http://10.232.204.69:8080"
+    proxy: "http://10.193.178.133:8080"
 
 mysql:
     dsn: "data.db"
     max_idle_conns: 10
     max_open_conns: 100
+
+cron:
+    spec: "@every 1m"

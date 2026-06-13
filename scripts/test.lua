@@ -23,11 +23,24 @@ if not desc then
     desc = "暂无简介"
 end
 
+local related_urls = {}
+
+-- 解释：在 GitHub 源码中，仓库链接通常长这样 href="/vuejs/vue"
+-- 我们用 Lua 的正则 [%w%-%.]+ 匹配包含字母、数字、横杠、点号的用户名和仓库名
+for repo_name in string.gmatch(body, 'href="/([%w%-%.]+/[%w%-%.]+)"') do
+    -- 组装成完整的 URL，并塞入一个数组中
+    local full_url = "https://github.com/" .. repo_name
+    table.insert(related_urls, full_url)
+end
+
+
+
 -- 🎯 【核心动作】：打包数据并返回给 Go
 local result = {
     url = target_url,
-    stars = 99999999,
-    description = desc
+    stars = star_count_str,
+    description = desc,
+    fission_urls=related_urls
 }
 
 -- 成功时，返回 true 和打包好的数据
