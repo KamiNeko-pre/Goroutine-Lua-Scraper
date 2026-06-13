@@ -9,3 +9,14 @@ data.db
 # 依赖包目录与临时文件
 /vendor/
 .DS_Store
+
+# AI 工具配置与缓存（不上传）
+.agents/
+.claude/
+.codegraph/
+.gemini/
+.reasonix/
+reasonix.toml
+
+# 项目开发文档（本地参考用，不上传）
+temp/
