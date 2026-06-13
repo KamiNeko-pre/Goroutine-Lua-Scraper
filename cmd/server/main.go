@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go-lua-crawler/internal/config"
 	"go-lua-crawler/internal/engine"
+	"go-lua-crawler/internal/scheduler"
 
 	//"go-lua-crawler/internal/engine"
 	"go-lua-crawler/internal/logger"
@@ -11,7 +12,7 @@ import (
 	"go-lua-crawler/internal/router"
 
 	//"sync"
-
+	"time"
 	"go.uber.org/zap"
 )
 
@@ -26,10 +27,13 @@ func main(){
 	//初始化热更新
 	logger.Log.Info("====启动Lua热更新===")
 	engine.InitLuaEngine(config.Get().App.LuaPath)
+	//初始化自动更新数据
+	logger.Log.Info("======启动自动调度引擎=====")
+	scheduler.InitCron()
 
     //启动协程
 	logger.Log.Info("=====后台工人团队开始孵化======")
-	for i:=1;i<=3;i++{
+	for i:=1;i<=15;i++{
 		go func(workerID int){
 			for task:=range engine.TaskQuene{
 				logger.Log.Info("工人抢到订单,开始干活",zap.Int("工人编号",workerID),zap.String("目标",task))
@@ -39,6 +43,7 @@ func main(){
 				}else{
 					logger.Log.Info("抓取并入库成功",zap.Int("工人",workerID),zap.String("目标",task))
 				}
+				time.Sleep(time.Second)
 			}
 		}(i)
 	}

@@ -11,6 +11,7 @@ import (
 type Config struct {
 	App   AppConfig   `mapstructure:"app"`
 	MySQL MySQLConfig `mapstructure:"mysql"`
+	Cron CronConfig   `mapstructure:"cron"`
 }
 
 type AppConfig struct {
@@ -22,6 +23,9 @@ type MySQLConfig struct {
 	DSN          string `mapstructure:"dsn"`
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 	MaxOpenConns int    `mapstructure:"max_open_conns"`
+}
+type CronConfig struct{
+	Spec string         `mapstructure:"spec"`
 }
 
 var(
