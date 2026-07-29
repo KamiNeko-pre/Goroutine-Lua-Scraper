@@ -2,11 +2,25 @@ app:
     port: 8080
     lua_path: "./scripts/test.lua"
     proxy: "http://proxy.example.invalid:8080"
+    pprof_port: 0
 
 mysql:
-    dsn: "data.db"
+    dsn: "root:CHANGE_ME@tcp(127.0.0.1:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=Local"
     max_idle_conns: 10
     max_open_conns: 100
 
 cron:
     spec: "@every 1m"
+
+engine:
+    worker_count: 15
+    task_queue_size: 1000
+    lua_timeout: 30
+    http_timeout_direct: 5
+    http_timeout_proxy: 15
+
+crawler:
+    request_delay_min: 500
+    request_delay_max: 3000
+    max_fission_depth: 2
+    max_fission_urls: 20

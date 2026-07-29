@@ -5,6 +5,7 @@ data.db
 
 # 编译生成的可执行文件 (Windows 环境)
 *.exe
+/build/
 
 # 依赖包目录与临时文件
 /vendor/
@@ -20,3 +21,12 @@ reasonix.toml
 
 # 项目开发文档（本地参考用，不上传）
 temp/
+.agents/.deps/
+
+# 本地求职材料、生成产物与设计预览
+/output/
+/tmp/
+/.superpowers/
+/scripts/resume/
+/skills-lock.json
+/开发流程.txt

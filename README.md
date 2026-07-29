@@ -1,89 +1,119 @@
-# Goroutine-Lua-Scraper
+# LuaSpider
 
-Go 宿主 + Lua 脚本引擎的爬虫框架。Go 提供网络、解析、存储、调度基础设施，Lua 脚本作为业务插件定义抓取规则，支持热重载。
+LuaSpider 是一个 Go 宿主驱动的 Lua 规则抓取引擎。Go 负责 HTTP API、
+并发调度、受控网络访问和 MySQL 持久化，Lua 规则负责页面请求、字段提取
+和链接发现，并支持文件热重载。
 
-## 工作流
+当前仓库处于 Redis Streams 改造前的单进程基线阶段。README 只描述已经
+实现并验证的能力；分布式消费、故障接管和重试仍属于下一阶段。
 
+## Current architecture
+
+```text
+POST /api/v1/task
+        |
+        v
+bounded channel -- full --> HTTP 429
+        |
+        v
+fixed worker pool
+        |
+        v
+isolated Lua VM -- Context timeout
+        |
+        +--> restricted HTTP + goquery helpers
+        |
+        v
+MySQL upsert
 ```
-POST /api/v1/task → Channel(1000) → 15 Workers → Lua VM → HTTP GET → goquery 解析 → SQLite
-                                                         ↑
-                                                    fsnotify 热重载
+
+## Implemented
+
+- Gin task submission and result query APIs.
+- Bounded in-process channel and configurable fixed worker pool.
+- One isolated gopher-lua `LState` per task.
+- VM-level cancellation through `context.WithTimeout` and `L.SetContext`.
+- Restricted Lua standard libraries and context-aware HTTP requests.
+- HTTP/HTTPS validation, private literal IP rejection, redirect revalidation and
+  a 4 MiB response limit.
+- Lua rule hot reload with the last successfully read in-memory script retained
+  on file read failure.
+- MySQL persistence with a configured connection pool and business unique index.
+- Optional localhost-only pprof endpoint.
+- Unit tests and a resource-limited Docker benchmark environment.
+
+## Known boundaries
+
+- Accepted tasks exist only in the process channel. A crash loses queued tasks;
+  the measured baseline is documented in
+  [`CHANNEL-CRASH-001`](docs/benchmarks/CHANNEL-CRASH-001.md).
+- The current result model and default rule are GitHub-specific.
+- There is no durable task state, retry, dead-letter queue or multi-instance
+  coordination yet.
+- Lua rules are trusted repository files. Context limits execution time but is
+  not a per-script hard memory sandbox.
+- MySQL is a single instance in the current development environment.
+
+## Quick start
+
+1. Start MySQL and create the database named by `mysql.dsn`.
+2. Update `configs/config.yaml` for the local MySQL and optional proxy settings.
+3. Start the complete server package:
+
+```powershell
+go run ./cmd/server
 ```
 
-## 快速开始
+Submit a task:
 
 ```bash
-# 启动
-go run cmd/server/main.go
-
-# 提交抓取任务
 curl -X POST http://localhost:8080/api/v1/task \
   -H "Content-Type: application/json" \
   -d '{"target":"vue","url":"https://github.com/vuejs/vue"}'
-
-# 查询结果
-curl http://localhost:8080/api/v1/task?repo=vuejs/vue
 ```
 
-## 技术栈
+Query the current result:
 
-- **Gin** — HTTP API
-- **GORM + SQLite** — 数据持久化
-- **gopher-lua** — Lua 虚拟机嵌入
-- **goquery** — HTML CSS 选择器解析
-- **fsnotify** — 脚本文件监听与热重载
-- **robfig/cron** — 定时自动更新
-- **Viper** — 配置管理（支持热更新）
-- **Zap** — 结构化日志
-
-## 项目结构
-
-```
-cmd/server/main.go        # 入口：启动配置、日志、数据库、worker 池、HTTP 服务
-internal/
-  config/config.go         # Viper 配置读取与热更新
-  logger/logger.go         # Zap 全局日志
-  repository/db.go         # GORM 初始化 + GithubRepo 模型
-  engine/lua_engine.go     # Lua 引擎：脚本加载、热重载、HTTP/HTML 函数注入
-  scheduler/cron.go        # Cron 定时调度
-  handler/task.go          # API 处理器：创建任务、查询结果
-  router/router.go         # Gin 路由
-scripts/test.lua           # Lua 抓取脚本（GitHub 仓库 Star/描述/裂变链接）
-configs/config.yaml        # 配置文件
+```bash
+curl "http://localhost:8080/api/v1/task?repo=vuejs/vue"
 ```
 
-## Lua 脚本能做什么
+## Lua host API
 
-Go 侧向 Lua 虚拟机注入了两个函数：
+The Go host currently exposes these functions to trusted Lua rules:
 
-- `http_get(url)` — 发起 HTTP GET，返回 HTML body
-- `html_find(html, selector)` — 用 CSS 选择器从 HTML 中提取文本
+- `http_get(url)`: fetch an HTTP/HTTPS response with task cancellation.
+- `html_find(html, selector)`: return the first matching element's text.
+- `html_find_all(html, selector)`: return all matching text values.
+- `html_attr_all(html, selector, attribute)`: return an attribute from every
+  matching element.
+- `url_resolve(base, reference)`: resolve a relative link against its base URL.
 
-Lua 脚本拿到目标 URL 后，调用这两个函数完成抓取和解析，最后返回 `(true, table)` 或 `(false, error_message)`。
+A rule returns `(true, result_table)` on success or `(false, error_message)` on
+failure. The current result table contains `url`, `stars`, `description` and
+optional `fission_urls`.
 
-```lua
-local body, err = http_get(TARGET_URL)
-if err then return false, "网络请求失败: " .. err end
+## Verification
 
-local star = html_find(body, "#repo-stars-counter-star")
--- ...
-return true, {url = TARGET_URL, stars = star, description = desc}
+```powershell
+go test ./...
+go vet ./...
+go build ./...
 ```
 
-修改脚本后保存，fsnotify 检测到变更自动热重载，无需重启服务。
+Preserved evidence:
 
-## 当前状态
+- [`BASELINE-CHANNEL-001`](docs/benchmarks/BASELINE-CHANNEL-001.md): worker 1/2/4
+  throughput under fixed resources.
+- [`SATURATION-WORKER-4-001`](docs/benchmarks/SATURATION-WORKER-4-001.md):
+  four-worker saturation follow-up.
+- [`LUA-TIMEOUT-001`](docs/verification/LUA-TIMEOUT-001.md): repeated Lua
+  deadline interruption.
+- [`CHANNEL-CRASH-001`](docs/benchmarks/CHANNEL-CRASH-001.md): in-process queue
+  crash-loss boundary.
 
-这是 MVP 版本，技术验证完成。后续计划：
+## Next release gate
 
-- [ ] Lua 执行超时保护（沙箱）
-- [ ] 优雅退出
-- [ ] 多脚本支持 + 独立调度
-- [ ] MySQL + Redis 布隆过滤器 + Redis 任务队列
-- [ ] 多数据源（Steam 史低、掘金热榜）
-- [ ] pprof 性能剖析
-- [ ] 测试与 Docker 化
-
-## License
-
-MIT
+The next release replaces the process channel with a MySQL task state machine
+and Redis Streams Consumer Group. It will add idempotent submission, ACK after
+database commit, multi-worker consumption and recoverable pending messages.
