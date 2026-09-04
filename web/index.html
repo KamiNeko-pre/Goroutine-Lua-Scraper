@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f6f8fa">
+    <title>LuaSpider · 采集洞察</title>
+    <link rel="stylesheet" href="/assets/styles.css">
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <a class="brand" href="/" aria-label="LuaSpider 首页">
+          <span class="brand-mark" aria-hidden="true">LS</span>
+          <span class="brand-copy">
+            <strong>LuaSpider</strong>
+            <small>多源采集洞察</small>
+          </span>
+        </a>
+
+        <nav class="primary-nav" aria-label="主导航">
+          <a class="nav-link is-active" href="#overview">洞察概览</a>
+          <a class="nav-link" href="#data">数据浏览</a>
+          <a class="nav-link" href="#changes">变化事件</a>
+          <a class="nav-link" href="#sources">数据源</a>
+          <a class="nav-link" href="#rules">Lua 规则</a>
+          <a class="nav-link" href="#runs">任务运行</a>
+        </nav>
+
+        <div class="topbar-actions">
+          <span class="sync-status"><span class="status-dot is-live" aria-hidden="true"></span>数据连接正常</span>
+          <button class="icon-button" id="refresh-button" type="button" title="刷新数据" aria-label="刷新数据">↻</button>
+          <button class="avatar-button" type="button" title="当前工作区" aria-label="当前工作区">Y</button>
+        </div>
+      </header>
+
+      <div class="workspace">
+        <main class="main-column" id="overview">
+          <section class="page-heading">
+            <div>
+              <p class="eyebrow">COLLECTION INTELLIGENCE</p>
+              <h1>采集洞察</h1>
+              <p class="page-subtitle">从多源快照中识别趋势、变化和数据质量。</p>
+            </div>
+            <div class="heading-meta">
+              <span class="meta-label">最近同步</span>
+              <strong id="last-sync">等待数据</strong>
+            </div>
+          </section>
+
+          <section class="filter-bar" id="filter-bar" aria-label="分析筛选">
+            <div class="filter-group">
+              <label for="rule-filter">规则</label>
+              <select id="rule-filter">
+                <option value="all">全部规则</option>
+              </select>
+            </div>
+            <div class="filter-group">
+              <label for="range-filter">时间范围</label>
+              <select id="range-filter">
+                <option value="24h">最近 24 小时</option>
+                <option value="7d" selected>最近 7 天</option>
+                <option value="30d">最近 30 天</option>
+              </select>
+            </div>
+            <div class="filter-spacer"></div>
+            <span class="filter-note" id="data-window">分析窗口：等待数据</span>
+          </section>
+
+          <section class="summary-grid" id="analysis-summary" aria-live="polite">
+            <article class="summary-tile">
+              <div class="tile-label">有效数据</div>
+              <div class="tile-value" data-summary="itemCount">--</div>
+              <div class="tile-foot" data-summary-foot="itemCount">等待快照</div>
+            </article>
+            <article class="summary-tile">
+              <div class="tile-label">采集运行</div>
+              <div class="tile-value" data-summary="runCount">--</div>
+              <div class="tile-foot" data-summary-foot="runCount">等待快照</div>
+            </article>
+            <article class="summary-tile">
+              <div class="tile-label">变化事件</div>
+              <div class="tile-value" data-summary="changeCount">--</div>
+              <div class="tile-foot" data-summary-foot="changeCount">等待快照</div>
+            </article>
+            <article class="summary-tile">
+              <div class="tile-label">规则健康</div>
+              <div class="tile-value" data-summary="healthyRules">--</div>
+              <div class="tile-foot" data-summary-foot="healthyRules">等待规则状态</div>
+            </article>
+          </section>
+
+          <div class="analysis-grid">
+            <section class="panel trend-panel" id="trend-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="panel-kicker">DATA VOLUME</p>
+                  <h2>数据量与变化</h2>
+                </div>
+                <span class="panel-range" id="trend-range">--</span>
+              </div>
+              <div class="chart-legend" aria-label="图例">
+                <span><i class="legend-swatch swatch-volume" aria-hidden="true"></i>有效数据</span>
+                <span><i class="legend-swatch swatch-change" aria-hidden="true"></i>变化项</span>
+              </div>
+              <div class="trend-chart" id="trend-chart" aria-label="数据量和变化趋势">
+                <div class="empty-state compact">加载分析数据后显示趋势</div>
+              </div>
+            </section>
+
+            <section class="panel distribution-panel" id="change-panel">
+              <div class="panel-heading">
+                <div>
+                  <p class="panel-kicker">SOURCE MIX</p>
+                  <h2>来源分布</h2>
+                </div>
+                <span class="panel-range" id="source-count">--</span>
+              </div>
+              <div class="source-list" id="source-list">
+                <div class="empty-state compact">等待来源数据</div>
+              </div>
+            </section>
+          </div>
+
+          <section class="panel data-panel" id="items-panel">
+            <div class="panel-heading data-heading">
+              <div>
+                <p class="panel-kicker">LATEST SIGNALS</p>
+                <h2>最近采集到的数据</h2>
+              </div>
+              <div class="data-heading-actions">
+                <span class="result-count" id="result-count">0 条</span>
+                <button class="text-button" id="open-data-button" type="button">查看全部 <span aria-hidden="true">→</span></button>
+              </div>
+            </div>
+            <div class="table-wrap" id="items-table-wrap">
+              <div class="empty-state">选择规则或等待真实快照后，这里会显示结构化数据。</div>
+            </div>
+          </section>
+        </main>
+
+        <aside class="trust-sidebar" aria-label="数据可信度">
+          <section class="sidebar-section" id="health-panel">
+            <div class="sidebar-heading">
+              <div>
+                <p class="panel-kicker">TRUST SIGNALS</p>
+                <h2>规则健康</h2>
+              </div>
+              <button class="quiet-button" type="button" title="刷新规则健康状态" aria-label="刷新规则健康状态">↻</button>
+            </div>
+            <p class="sidebar-intro">健康度结合执行结果、数据条数和新鲜度判断。</p>
+            <div class="health-list" id="health-list">
+              <div class="empty-state compact">等待规则状态</div>
+            </div>
+          </section>
+
+          <section class="sidebar-section trace-section" id="trace-panel">
+            <div class="sidebar-heading">
+              <div>
+                <p class="panel-kicker">RUN TRACE</p>
+                <h2>运行追踪</h2>
+              </div>
+              <span class="trace-task" id="trace-task">未选择任务</span>
+            </div>
+            <div class="trace-list" id="trace-list">
+              <div class="empty-state compact">点击一条运行记录查看生命周期</div>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <dialog class="json-dialog" id="json-dialog">
+      <div class="dialog-heading">
+        <div>
+          <p class="panel-kicker">RAW PAYLOAD</p>
+          <h2>原始快照</h2>
+        </div>
+        <button class="icon-button" id="close-json-button" type="button" title="关闭" aria-label="关闭">×</button>
+      </div>
+      <pre id="json-content"></pre>
+    </dialog>
+
+    <script type="module" src="/assets/app.js"></script>
+  </body>
+</html>
