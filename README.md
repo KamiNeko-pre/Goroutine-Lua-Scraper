@@ -1,163 +1,209 @@
+<div align="center">
+
 # LuaSpider
 
-> Go 驱动的 Lua 规则多源采集平台
+**Lua 规则驱动的多源数据采集平台**
 
-LuaSpider 把**任务调度、并发执行、可靠投递和结果持久化**放在 Go 中，把不同网站的解析逻辑放在 Lua 规则中。新增采集来源时，只需要增加受信任的 Lua 规则和对应元数据，不需要改动 Worker、队列或存储主链路。
+用 Go 管理任务生命周期，用 Lua 适配数据来源。<br>
+从异步采集、可靠投递到结构化快照与分析工作台。
 
-当前仓库包含一条可运行的 Redis Streams 持久化任务链路、两个示例来源（GitHub Trending 与 Hacker News）以及一个用于快照分析、规则健康检查和任务排障的 Web 工作台。
+<p>
+  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go 1.26">
+  <img src="https://img.shields.io/badge/Lua-gopher--lua-2C2D72?style=flat-square&logo=lua&logoColor=white" alt="gopher-lua">
+  <img src="https://img.shields.io/badge/Redis-Streams-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis Streams">
+  <img src="https://img.shields.io/badge/MySQL-Outbox-4479A1?style=flat-square&logo=mysql&logoColor=white" alt="MySQL Outbox">
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker Compose">
+</p>
 
-## 能做什么
+[核心能力](#capabilities) · [系统架构](#architecture) · [快速启动](#quickstart) · [规则扩展](#rules) · [开发与验证](#development)
 
-- 通过 HTTP API 创建异步采集任务，并使用 `request_key` 保证客户端重试不会重复创建同一任务。
-- 使用固定数量 Worker 执行任务，限制并发度，避免每个请求无限创建 goroutine。
-- 用 Lua 描述 HTTP 请求后的 DOM 提取、字段转换和统一 JSON 结果，不同来源共享 Go 执行引擎。
-- 用 MySQL 保存任务与结果，用 Redis Streams Consumer Group 在独立进程之间传递任务 ID。
-- 用 MySQL Outbox 把“任务创建”和“待投递记录”放在同一个事务中，Publisher 可重试投递。
-- 用状态 CAS、执行租约和随机运行令牌隔离并发抢占；Worker 中断后由 `XAUTOCLAIM` 接管空闲消息。
-- 通过分析工作台查看最新快照、字段分布、数值趋势、快照差异、规则健康度和任务事件链路。
+</div>
 
-## 架构
+---
 
-```text
-                          MySQL source of truth
-                         ┌──────────────────────┐
-POST /api/v1/tasks ─────▶│ CrawlTask + Outbox   │
-                         └──────────┬───────────┘
-                                    │ publisher polls unpublished rows
-                                    ▼
-                         ┌──────────────────────┐
-                         │ Redis Stream         │
-                         │ Consumer Group       │
-                         └──────────┬───────────┘
-                                    │ XREADGROUP / XAUTOCLAIM
-                                    ▼
-                         ┌──────────────────────┐
-                         │ Worker processes     │
-                         │ bounded concurrency  │
-                         └──────────┬───────────┘
-                                    │ task-local Lua VM + Context
-                                    ▼
-              ┌─────────────────────┴─────────────────────┐
-              │ HTTP fetch -> Lua parse -> JSON validation │
-              └─────────────────────┬─────────────────────┘
-                                    ▼
-                         ┌──────────────────────┐
-                         │ MySQL result +       │
-                         │ terminal task state  │
-                         └──────────┬───────────┘
-                                    │ commit succeeds first
-                                    ▼
-                                  XACK
+不同网站的页面结构会变化，但任务调度、并发控制和结果存储不应随之重写。LuaSpider 将这些能力沉淀为共享后端，站点差异交给 Lua 规则处理。
+
+**GitHub Trending 与 Hacker News 是两个接入示例，而不是平台边界。** 在现有 HTTP / DOM 能力范围内，新增来源只需增加规则脚本与元数据，即可复用任务链路和结果展示。
+
+<a id="capabilities"></a>
+## 核心能力
+
+| 采集与扩展 | 执行与可靠性 | 分析与排障 |
+| :--- | :--- | :--- |
+| Lua 描述请求、解析与字段转换 | API、Publisher、Worker 独立进程 | 结构化结果与历史快照 |
+| `items / meta` 统一结果契约 | Worker Pool 限制执行并发 | 排行、字段分布与数值趋势 |
+| 本地规则更新，无需重新编译 Go | 独立 LState 与 Context 超时 | 快照差异与字段质量检查 |
+| 规则元数据映射不同来源字段 | Outbox 投递与 Streams 故障接管 | 规则健康度与任务事件追踪 |
+
+工作台将采集结果组织为可查看、可比较的快照；后端保留任务状态、错误信息与执行事件，支持从数据异常回溯到对应任务。
+
+<a id="architecture"></a>
+## 系统架构
+
+**MySQL 保存任务事实，Redis 传递任务引用，Worker 执行 Lua 规则。**
+
+```mermaid
+flowchart TB
+    subgraph delivery["任务受理与投递"]
+        direction LR
+        API["HTTP API<br/>校验 · 请求幂等"] -->|"事务创建"| TASK[("MySQL<br/>Task + Outbox")]
+        TASK --> PUB["Publisher"]
+        PUB -->|"XADD task_id"| STREAM[("Redis Streams<br/>Consumer Group")]
+    end
+    subgraph execution["规则执行与结果"]
+        direction LR
+        WORKER["Worker Pool<br/>CAS · 租约 · Token"] --> LUA["独立 Lua VM<br/>HTTP → 解析 → JSON"]
+        LUA -->|"事务提交"| RESULT[("MySQL<br/>结果 + 终态")]
+        RESULT -->|"只读 API"| UI["分析工作台<br/>快照 · 趋势 · 健康度"]
+    end
+    STREAM -->|"XREADGROUP"| WORKER
+    STREAM -.->|"XAUTOCLAIM 接管"| WORKER
+    RESULT -.->|"提交后 XACK"| STREAM
+
+    classDef service fill:#eff6ff,stroke:#3b82f6,color:#172554;
+    classDef storage fill:#f0fdf4,stroke:#16a34a,color:#14532d;
+    classDef executionNode fill:#fff7ed,stroke:#ea580c,color:#7c2d12;
+    class API,PUB,UI service;
+    class TASK,STREAM,RESULT storage;
+    class WORKER,LUA executionNode;
 ```
 
-### 关键设计
+### 为什么这样设计
 
-**规则与执行引擎解耦**
+| 工程问题 | 设计选择 | 作用 |
+| :--- | :--- | :--- |
+| 慢网站占用请求处理时间 | 异步受理 + 固定 Worker | API 返回任务 ID，执行并发由 Worker 数控制 |
+| 站点解析规则频繁变化 | Lua 规则与 Go 引擎解耦 | 更新解析逻辑无需重新编译 Go 服务 |
+| 规则状态串扰、执行失控 | 每任务独立 LState + Context | 隔离全局变量，将截止时间传入 VM 与 HTTP 请求 |
+| MySQL 成功后消息未发出 | Task 与 Outbox 同事务 | Publisher 可继续投递未发布记录 |
+| 重投、并发抢占与旧执行者恢复 | 状态 CAS + 租约 + 运行令牌 | 接管后替换令牌，拒绝旧执行者提交 |
+| 完成落库与消息确认存在间隙 | 结果与终态同事务，提交后 ACK | 重放时识别终态，避免重复提交结果 |
 
-Go 只提供受限的 `http_get`、DOM 选择器和 URL 处理能力。Lua 规则返回统一的 `items` / `meta` 结构，Worker 不需要理解每个网站的字段。每个任务使用独立 Lua VM，避免脚本全局状态在任务之间串扰；Context 超时会传入 Lua VM，网络请求和脚本执行共享任务截止时间。
+> **交付语义：至少一次投递 + 幂等终态提交。** 消息和外部抓取可能重复，系统不承诺跨 Redis / MySQL 的 Exactly Once。
 
-**有界并发与背压**
-
-Worker 数量由配置决定。HTTP 接口只负责校验和创建任务，慢网络与 Lua 执行不会阻塞请求线程；队列或下游不可用时由状态和错误信息暴露问题，而不是无界堆积任务。
-
-**Outbox + Redis Streams**
-
-任务记录和 Outbox 记录在同一个 MySQL 事务中提交。Publisher 扫描 `published_at IS NULL` 的记录，将任务 ID 写入 Redis Stream 后再标记 Outbox；发布失败时记录仍可被下一轮重试。Redis 只承载任务引用，MySQL 保留任务完整状态。
-
-**至少一次投递与故障恢复**
-
-Worker 在 `queued -> running` 时使用带旧状态条件的 CAS，并写入租约和运行令牌。处理完成后，结果和终态在同一 MySQL 事务中提交，成功后才 `XACK`。因此系统实现的是“至少一次投递 + 幂等终态提交”，不是 Exactly Once；外部网站请求在故障恢复时可能重复发生，但过期 Worker 不能提交新结果。
-
-**从采集到分析**
-
-工作台通过只读 API 获取已结束任务的快照，按规则元数据解释字段，支持排行、趋势、快照差异、字段质量和任务事件追踪。GitHub 与 Hacker News 是示例来源，同一套结果契约可以承载其他 Lua 规则。
-
-## 技术栈
-
-| 层次 | 技术 |
-| --- | --- |
-| HTTP 服务 | Go、Gin |
-| 并发与执行 | goroutine、channel、Worker Pool、`context.Context` |
-| 规则引擎 | gopher-lua、goquery、fsnotify |
-| 任务投递 | Redis Streams、Consumer Group、`XAUTOCLAIM` |
-| 持久化 | MySQL、GORM、事务与条件更新 |
-| 日志与诊断 | zap、任务事件、pprof |
-| 展示 | 原生 HTML/CSS/JavaScript、ECharts、Lucide |
-| 本地运行 | Docker Compose |
-
-## 项目结构
-
-```text
-cmd/
-  server/       HTTP API、静态工作台和本地入口
-  publisher/    Outbox -> Redis Stream 发布进程
-  worker/       Redis Consumer Group 消费与故障接管进程
-configs/
-  config.yaml   脱敏后的默认配置模板
-  rules.yaml    规则与展示元数据
-internal/
-  engine/       Lua VM、HTTP/DOM 能力和结果契约
-  handler/      HTTP 请求、任务、分析和事件接口
-  queue/        Redis 客户端、Stream 和发布操作
-  repository/   MySQL 模型、事务、CAS、Outbox 和查询
-  service/      Outbox 发布服务
-  task/         任务状态与领域模型
-  worker/       Consumer、Reclaimer 和消息处理器
-  router/       API 与静态页面路由
-scripts/
-  *.lua         GitHub、Hacker News 等示例规则
-web/
-  index.html    分析工作台
-  assets/       页面逻辑、样式和本地依赖
-```
-
+<a id="quickstart"></a>
 ## 快速启动
 
-需要 Docker Desktop。公开 Compose 使用本地 MySQL 和 Redis，密码只从未提交的 `.env` 读取。
+需要 **Docker 与 Docker Compose**，也可使用 Docker Desktop。在仓库根目录执行：
 
 ```bash
 cp .env.example .env
+```
+
+将 `.env` 中的 `MYSQL_ROOT_PASSWORD` 改为本地演示密码，然后启动：
+
+```bash
 docker compose up --build -d
 ```
 
-Windows PowerShell 可使用：
+打开 **[localhost:8080](http://localhost:8080/)** 进入工作台。Compose 启动 API、Publisher、Worker、MySQL 和 Redis；默认配置 4 个 Worker，可在 `.env` 中调整 `WORKERS`。
+
+<details>
+<summary>Windows PowerShell</summary>
 
 ```powershell
 Copy-Item .env.example .env
+# 修改 .env 中的本地演示密码后启动
 docker compose up --build -d
 ```
 
-打开 `http://localhost:8080/` 查看工作台。提交一条 GitHub Trending 任务：
+</details>
+
+### 创建一条采集任务
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/tasks \
   -H 'Content-Type: application/json' \
-  -d '{"request_key":"demo-github-001","target":"github_trending_go","url":"https://github.com/trending/go?since=daily"}'
+  -d '{
+    "request_key": "demo-github-001",
+    "target": "github_trending_go",
+    "url": "https://github.com/trending/go?since=daily"
+  }'
 ```
 
-提交响应中的任务 ID 可用于轮询：
+用响应中的任务 ID 查询状态和结果：
 
-```bash
-curl http://localhost:8080/api/v1/tasks/1
-curl http://localhost:8080/api/v1/tasks/1/result
-```
+| 接口 | 用途 |
+| :--- | :--- |
+| `POST /api/v1/tasks` | 创建异步任务 |
+| `GET /api/v1/tasks/{id}` | 查询执行状态与错误 |
+| `GET /api/v1/tasks/{id}/result` | 获取已保存的结果快照 |
 
-Hacker News 示例规则对应 `target: hackernews_top`。停止服务但保留本地数据：
+同一次请求重试时保持 `request_key` 不变；发起新一轮采集时使用新值。外部站点的网络可达性、限流与页面变化会影响采集结果，可在工作台查看任务错误。
+
+<details>
+<summary>停止服务与保留数据</summary>
 
 ```bash
 docker compose down
 ```
 
-## 新增规则
+默认保留 MySQL / Redis 数据卷。`.env` 不应提交到版本库。
 
-1. 在 `scripts/` 增加一个受信任的 Lua 文件。
-2. 让脚本调用 `http_get(TARGET_URL)`，并返回 `true, {items = {...}, meta = {...}}`；失败时返回 `false, "error message"`。
-3. 在 `configs/rules.yaml` 增加规则 ID、脚本路径、目标 URL、最小条数、唯一键和展示字段映射。
-4. 使用该规则 ID 作为创建任务请求的 `target`。
+</details>
 
-规则脚本运行在受限库环境中，当前规则目录是本地受信任配置，不提供未审查脚本的在线上传、权限系统或多租户隔离。
+<a id="rules"></a>
+## 规则扩展
 
-## 验证
+**一份脚本定义采集，一份元数据定义来源与展示。**
+
+| 示例来源 | Target | 规则 |
+| :--- | :--- | :--- |
+| GitHub Go Trending | `github_trending_go` | [github_trending.lua](scripts/github_trending.lua) |
+| Hacker News | `hackernews_top` | [hackernews_collection.lua](scripts/hackernews_collection.lua) |
+
+1. 在 `scripts/` 新增受信任的 Lua 脚本，调用宿主提供的 HTTP / DOM 能力。
+2. 成功返回 `true, {items = {...}, meta = {...}}`，失败返回 `false, "error message"`。
+3. 在 [configs/rules.yaml](configs/rules.yaml) 注册来源 ID、脚本路径、URL、唯一键、最小条数与展示字段映射。
+4. 使用该来源 ID 作为 API 请求的 `target`，复用已有调度与持久化链路。
+
+| 宿主能力 | 用途 |
+| :--- | :--- |
+| `http_get` | 获取页面内容 |
+| `html_find` / `html_find_all` | 按选择器提取文本 |
+| `html_attr_all` | 提取链接等 HTML 属性 |
+| `url_resolve` | 解析相对 URL |
+| `TARGET_URL` | 当前任务目标地址 |
+
+注册规则在任务执行时读取本地脚本，后续任务可使用更新内容。默认规则另有文件监听与文本缓存机制。当前 Compose 将规则打包进镜像；通过镜像部署规则变更需重新构建，文件级热更新需要更新实际运行环境中的规则文件。
+
+<a id="development"></a>
+## 开发与验证
+
+**后端** · Go / Gin / GORM / gopher-lua / goquery / fsnotify<br>
+**存储与队列** · MySQL / Redis Streams<br>
+**诊断与运行** · zap / pprof / Go Test / Docker Compose<br>
+**工作台** · HTML / CSS / JavaScript / ECharts / Lucide
+
+<details>
+<summary>项目目录与职责</summary>
+
+```text
+LuaSpider/
+├── cmd/
+│   ├── server/        HTTP API 与静态工作台
+│   ├── publisher/     Outbox 发布进程
+│   └── worker/        消费与故障接管进程
+├── configs/           服务配置与规则元数据
+├── internal/
+│   ├── engine/        Lua VM、HTTP/DOM 与结果契约
+│   ├── handler/       任务、分析与事件接口
+│   ├── queue/         Redis 客户端与 Stream 操作
+│   ├── repository/    MySQL 模型、事务、CAS 与查询
+│   ├── service/       Outbox 发布编排
+│   ├── task/         任务状态与领域模型
+│   ├── worker/       Consumer、Reclaimer 与执行器
+│   └── router/       路由与静态页面服务
+├── scripts/           Lua 采集规则
+├── web/               分析工作台
+├── .env.example       本地环境变量模板
+└── docker-compose.yml 本地多进程演示环境
+```
+
+</details>
+
+<details>
+<summary>测试与构建命令</summary>
 
 ```bash
 go test ./...
@@ -166,4 +212,14 @@ go build ./...
 node --test web/assets/analysis.test.mjs web/assets/workbench.test.mjs
 ```
 
-`docker-compose.yml` 是本地单节点演示环境：Redis 和 MySQL 的进程可以拆开部署，多个 Worker 可以加入同一个 Consumer Group；它不等同于数据库或 Redis 的基础设施高可用集群。任务投递语义、状态转换和恢复边界以代码为准，README 不把本地测试结果包装成生产指标。
+部分集成测试需要对应的 MySQL / Redis 环境；被跳过的测试不代表该链路已验证。测试和构建结果应以实际执行输出为准。
+
+</details>
+
+## 使用边界
+
+- **部署**：公开 Compose 为本地单节点依赖环境。Worker 支持跨进程协作，不等同于 Redis / MySQL 高可用集群。
+- **规则**：当前面向受信任的本地脚本；Context 限时不等于每脚本硬内存隔离，不提供未审查脚本上传或多租户权限。
+- **恢复**：支持未确认、非终态任务的故障接管；已记录的 Lua / HTTP 失败不会自动无限重试，Redis 数据全量丢失不在完整自动恢复保证内。
+- **容量**：固定 Worker 限制执行并发，不代表持久化队列积压有硬上限。持续过载仍需容量规划与接入控制。
+- **采集**：仅在获得许可的范围内使用，遵守目标站点规则并控制请求频率；不提供验证码绕过或通用反爬能力。
