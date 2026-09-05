@@ -3,12 +3,15 @@ package repository
 import (
 	"errors"
 	"fmt"
+	mysqldriver "github.com/go-sql-driver/mysql"
 	"go-lua-crawler/internal/config"
 	"go-lua-crawler/internal/logger"
+	taskmodel "go-lua-crawler/internal/task"
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"strings"
+	"time"
 )
 
 var DB *gorm.DB
@@ -35,7 +38,23 @@ func InitDB() error {
 	if err := validateMySQLDSN(dsn); err != nil {
 		return fmt.Errorf("validate MySQL DSN: %w", err)
 	}
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{})
+	// Transaction Commit has no context parameter in database/sql. Bound the
+	// transport as well, so a lost COMMIT reply cannot block shutdown forever.
+	parsedDSN, err := mysqldriver.ParseDSN(dsn)
+	if err != nil {
+		return fmt.Errorf("parse MySQL DSN: %w", err)
+	}
+	if parsedDSN.Timeout == 0 {
+		parsedDSN.Timeout = 3 * time.Second
+	}
+	if parsedDSN.ReadTimeout == 0 {
+		parsedDSN.ReadTimeout = 10 * time.Second
+	}
+	if parsedDSN.WriteTimeout == 0 {
+		parsedDSN.WriteTimeout = 10 * time.Second
+	}
+	dsn = parsedDSN.FormatDSN()
+	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{TranslateError: true})
 	if err != nil {
 		return fmt.Errorf("open MySQL connection: %w", err)
 	}
@@ -50,7 +69,7 @@ func InitDB() error {
 
 	// AutoMigrate 会创建缺失的表和索引，但不会执行破坏性删除，
 	// 适合开发阶段保持模型与表结构同步。
-	if err := db.AutoMigrate(&GithubRepo{}); err != nil {
+	if err := db.AutoMigrate(&GithubRepo{}, &taskmodel.CrawlTask{}, &taskmodel.TaskOutbox{}, &taskmodel.TaskEvent{}, &CrawlResult{}); err != nil {
 		return fmt.Errorf("建表失败: %w", err)
 	}
 	DB = db

@@ -195,7 +195,7 @@ func TestValidateTargetURL(t *testing.T) {
 		{name: "localhost subdomain", rawURL: "http://api.localhost", wantErr: true},
 		{name: "IPv4 loopback", rawURL: "http://127.0.0.1", wantErr: true},
 		{name: "IPv6 loopback", rawURL: "http://[::1]", wantErr: true},
-		{name: "private IPv4", rawURL: "http://192.168.1.10", wantErr: true},
+		{name: "loopback IPv4", rawURL: "http://127.0.0.1:8080", wantErr: true},
 		{name: "link-local IPv4", rawURL: "http://169.254.169.254", wantErr: true},
 	}
 

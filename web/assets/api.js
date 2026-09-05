@@ -1,15 +1,18 @@
 const API_ROOT = "/api/v1";
 
 function createAPIError(response, body) {
-  const message = body?.message || body?.error || `请求失败（${response.status}）`;
+  const message =
+    body?.message || body?.error || `请求失败（${response.status}）`;
   const error = new Error(message);
   error.status = response.status;
   return error;
 }
 
-async function request(path) {
+async function request(path, options = {}) {
   const response = await fetch(`${API_ROOT}${path}`, {
-    headers: { Accept: "application/json" }
+    ...options,
+    signal: AbortSignal.timeout(20000),
+    headers: { Accept: "application/json", "Content-Type": "application/json" },
   });
   let body = null;
   try {
@@ -23,10 +26,26 @@ async function request(path) {
   return body?.data ?? body;
 }
 
+export function createTask({ target, url, requestKey }) {
+  return request("/tasks", {
+    method: "POST",
+    body: JSON.stringify({ target, url, request_key: requestKey }),
+  });
+}
+
+export function fetchTask(id) {
+  return request(`/tasks/${encodeURIComponent(id)}`);
+}
+
 function queryString(values) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(values)) {
-    if (value !== undefined && value !== null && value !== "" && value !== "all") {
+    if (
+      value !== undefined &&
+      value !== null &&
+      value !== "" &&
+      value !== "all"
+    ) {
       params.set(key, value);
     }
   }

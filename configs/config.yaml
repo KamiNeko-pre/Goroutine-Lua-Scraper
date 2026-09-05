@@ -1,13 +1,26 @@
 app:
     port: 8080
-    lua_path: "./scripts/test.lua"
-    proxy: "http://proxy.example.invalid:8080"
+    lua_path: "./scripts/hackernews_collection.lua"
+    proxy: ""
     pprof_port: 0
 
 mysql:
-    dsn: "root:CHANGE_ME@tcp(127.0.0.1:3306)/lua_crawler?charset=utf8mb4&parseTime=True&loc=Local"
+    # Set LUA_SPIDER_MYSQL_DSN in the local environment before starting.
+    dsn: ""
     max_idle_conns: 10
     max_open_conns: 100
+
+redis:
+    addr: "127.0.0.1:6379"
+    password: ""
+    db: 0
+    stream: "crawler:tasks"
+    consumer_group: "crawler-workers"
+
+publisher:
+    batch_size: 100
+    poll_interval_ms: 1000
+    batch_timeout_seconds: 10
 
 cron:
     spec: "@every 1m"

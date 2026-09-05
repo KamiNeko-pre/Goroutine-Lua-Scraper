@@ -2,6 +2,8 @@ package config
 
 import (
 	"log"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/fsnotify/fsnotify"
@@ -10,11 +12,13 @@ import (
 
 type Config struct {
 	// Config 是 config.yaml 的内存映射。mapstructure 标签将 YAML 字段映射到 Go 字段。
-	App     AppConfig     `mapstructure:"app"`
-	MySQL   MySQLConfig   `mapstructure:"mysql"`
-	Cron    CronConfig    `mapstructure:"cron"`
-	Engine  EngineConfig  `mapstructure:"engine"`
-	Crawler CrawlerConfig `mapstructure:"crawler"`
+	App       AppConfig       `mapstructure:"app"`
+	MySQL     MySQLConfig     `mapstructure:"mysql"`
+	Redis     RedisConfig     `mapstructure:"redis"`
+	Publisher PublisherConfig `mapstructure:"publisher"`
+	Cron      CronConfig      `mapstructure:"cron"`
+	Engine    EngineConfig    `mapstructure:"engine"`
+	Crawler   CrawlerConfig   `mapstructure:"crawler"`
 }
 
 type AppConfig struct {
@@ -30,6 +34,24 @@ type MySQLConfig struct {
 	MaxIdleConns int    `mapstructure:"max_idle_conns"`
 	MaxOpenConns int    `mapstructure:"max_open_conns"`
 }
+
+type RedisConfig struct {
+	Addr            string `mapstructure:"addr"`
+	Password        string `mapstructure:"password"`
+	DB              int    `mapstructure:"db"`
+	Stream          string `mapstructure:"stream"`
+	ConsumerGroup   string `mapstructure:"consumer_group"`
+	ClaimMinIdleMS  int    `mapstructure:"claim_min_idle_ms"`
+	ClaimIntervalMS int    `mapstructure:"claim_interval_ms"`
+}
+
+// PublisherConfig controls the standalone Outbox delivery process.
+type PublisherConfig struct {
+	BatchSize           int `mapstructure:"batch_size"`
+	PollIntervalMS      int `mapstructure:"poll_interval_ms"`
+	BatchTimeoutSeconds int `mapstructure:"batch_timeout_seconds"`
+}
+
 type CronConfig struct {
 	// Spec 是 robfig/cron 使用的定时表达式。
 	Spec string `mapstructure:"spec"`
@@ -60,10 +82,22 @@ var (
 )
 
 func InitConfig() {
+	viper.SetEnvPrefix("LUA_SPIDER")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	viper.AutomaticEnv()
+	bindEnvironment()
+	viper.SetDefault("redis.claim_min_idle_ms", 120000)
+	viper.SetDefault("redis.claim_interval_ms", 15000)
+	viper.SetDefault("publisher.batch_size", 100)
+	viper.SetDefault("publisher.poll_interval_ms", 1000)
+	viper.SetDefault("publisher.batch_timeout_seconds", 10)
 	// Viper 从项目根目录下的 configs/config.yaml 读取配置。
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
 	viper.AddConfigPath("./configs")
+	if path := os.Getenv("LUA_SPIDER_CONFIG"); path != "" {
+		viper.SetConfigFile(path)
+	}
 	if err := viper.ReadInConfig(); err != nil {
 		log.Fatalf("配置读取失败,请检查configs/config.yaml是否存在:%v", err)
 	}
@@ -90,6 +124,28 @@ func InitConfig() {
 		configMutex.Unlock()
 		log.Println("配置文件热更新成功")
 	})
+}
+
+// bindEnvironment makes deployment-only values such as a database DSN
+// replaceable without putting credentials in the checked-in YAML file.
+func bindEnvironment() {
+	keys := []string{
+		"app.port", "app.lua_path", "app.proxy", "app.pprof_port",
+		"mysql.dsn", "mysql.max_idle_conns", "mysql.max_open_conns",
+		"redis.addr", "redis.password", "redis.db", "redis.stream", "redis.consumer_group",
+		"redis.claim_min_idle_ms", "redis.claim_interval_ms",
+		"publisher.batch_size", "publisher.poll_interval_ms", "publisher.batch_timeout_seconds",
+		"cron.spec",
+		"engine.worker_count", "engine.task_queue_size", "engine.lua_timeout",
+		"engine.http_timeout_direct", "engine.http_timeout_proxy",
+		"crawler.request_delay_min", "crawler.request_delay_max",
+		"crawler.max_fission_depth", "crawler.max_fission_urls",
+	}
+	for _, key := range keys {
+		if err := viper.BindEnv(key); err != nil {
+			log.Fatalf("环境变量绑定失败 %s: %v", key, err)
+		}
+	}
 }
 
 func Get() *Config {

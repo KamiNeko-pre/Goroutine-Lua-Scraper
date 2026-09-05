@@ -22,7 +22,9 @@ func main() {
 	config.InitConfig()
 	// 任务队列是 HTTP 请求和后台 worker 之间的缓冲层。
 	// 队列满时，接口会立即返回 429，而不是让请求无限期阻塞。
-	engine.TaskQuene = make(chan string, config.Get().Engine.TaskQueueSize)
+	if config.Get().Engine.WorkerCount > 0 {
+		engine.TaskQuene = make(chan string, config.Get().Engine.TaskQueueSize)
+	}
 	// 初始化全局 zap 日志。defer 保证进程退出前尽量刷出缓冲日志。
 	logger.Init()
 	defer logger.Log.Sync()
@@ -36,7 +38,9 @@ func main() {
 	engine.InitLuaEngine(config.Get().App.LuaPath)
 	// 注册定时任务，将数据库中的历史仓库重新投递到任务队列。
 	logger.Log.Info("======启动自动调度引擎=====")
-	scheduler.InitCron()
+	if engine.TaskQuene != nil {
+		scheduler.InitCron()
+	}
 
 	// 启动固定数量的 worker。每个 worker 串行消费一个任务，
 	// 多个 worker 共同构成受 WorkerCount 控制的并发上限。

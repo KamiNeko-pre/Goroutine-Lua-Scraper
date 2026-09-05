@@ -1,0 +1,35 @@
+rules:
+  - id: github_trending_go
+    name: GitHub Go 趋势
+    script: scripts/github_trending.lua
+    url: https://github.com/trending/go?since=daily
+    source: GitHub
+    schedule: 6h
+    min_items: 3
+    item_key: url
+    display:
+      title: name
+      url: url
+      rank: rank
+      score: stars
+      score_label: Stars
+      group: language
+      group_label: 语言
+      description: description
+  - id: hackernews_top
+    name: Hacker News 热榜
+    script: scripts/hackernews_collection.lua
+    url: https://news.ycombinator.com/
+    source: Hacker News
+    schedule: 3h
+    min_items: 4
+    item_key: url
+    display:
+      title: title
+      url: url
+      rank: rank
+      score: points
+      score_label: Points
+      group: domain
+      group_label: 发布站点
+      description: author

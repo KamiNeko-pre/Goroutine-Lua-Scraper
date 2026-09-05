@@ -30,6 +30,10 @@ func CreateTask(c *gin.Context) {
 		})
 		return
 	}
+	if engine.TaskQuene == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"message": "Channel workers disabled; use POST /api/v1/tasks"})
+		return
+	}
 	logger.Log.Info("收到合法抓取任务", zap.String("target", req.Target), zap.String("url", req.URL))
 	// 使用带 default 的 select 实现非阻塞投递：当队列已满时立即拒绝请求，
 	// 用显式背压保护 worker 和进程内存。

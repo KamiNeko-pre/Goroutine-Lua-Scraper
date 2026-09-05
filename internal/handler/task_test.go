@@ -65,6 +65,13 @@ func TestCreateTask(t *testing.T) {
 			t.Fatalf("status = %d, want %d", response.Code, http.StatusTooManyRequests)
 		}
 	})
+	t.Run("disabled channel does not accept stranded tasks", func(t *testing.T) {
+		engine.TaskQuene = nil
+		response := createTaskRequest(`{"target":"github","url":"https://github.com/golang/go"}`)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("status=%d", response.Code)
+		}
+	})
 }
 
 func createTaskRequest(body string) *httptest.ResponseRecorder {

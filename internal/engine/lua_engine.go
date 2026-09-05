@@ -303,6 +303,7 @@ type luaScriptResult struct {
 	Stars       int
 	Description string
 	FissionURLs []string
+	Collection  map[string]any `json:"-"`
 }
 
 func openLuaSandboxLibraries(L *lua.LState) error {
@@ -348,6 +349,16 @@ func openLuaSandboxLibraries(L *lua.LState) error {
 // executeLuaScript owns one Lua VM for one task. It accepts timeout explicitly
 // so the production wrapper can use configuration while tests stay fast.
 func executeLuaScript(scriptText, targetURL string, timeout time.Duration) (luaScriptResult, error) {
+	return executeLuaScriptContext(context.Background(), scriptText, targetURL, timeout)
+}
+
+func executeLuaScriptContext(parent context.Context, scriptText, targetURL string, timeout time.Duration) (result luaScriptResult, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = luaScriptResult{}
+			err = fmt.Errorf("Lua execution panic: %v", recovered)
+		}
+	}()
 	L := lua.NewState(lua.Options{SkipOpenLibs: true})
 	defer L.Close()
 
@@ -356,17 +367,24 @@ func executeLuaScript(scriptText, targetURL string, timeout time.Duration) (luaS
 	}
 
 	L.SetGlobal("http_get", L.NewFunction(HttpGet))
-	L.SetGlobal("html_find", L.NewFunction(HtmlFind))
-	L.SetGlobal("html_find_all", L.NewFunction(HtmlFindAll))
-	L.SetGlobal("html_attr_all", L.NewFunction(HtmlAttrAll))
+	// A Lua VM owns exactly one task. Keep only that task's most recently parsed
+	// document so rules can make several selector queries without reparsing the
+	// same response or retaining DOM trees across tasks.
+	dom := newDOMCache()
+	L.SetGlobal("html_find", L.NewFunction(dom.htmlFind))
+	L.SetGlobal("html_find_all", L.NewFunction(dom.htmlFindAll))
+	L.SetGlobal("html_attr_all", L.NewFunction(dom.htmlAttrAll))
 	L.SetGlobal("url_resolve", L.NewFunction(URLResolve))
 	L.SetGlobal("TARGET_URL", lua.LString(targetURL))
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	L.SetContext(ctx)
 
 	if err := L.DoString(scriptText); err != nil {
+		if parent.Err() != nil {
+			return luaScriptResult{}, parent.Err()
+		}
 		if ctx.Err() == context.DeadlineExceeded {
 			return luaScriptResult{}, fmt.Errorf("Lua script execution timed out after %v: %w", timeout, ctx.Err())
 		}
@@ -387,6 +405,10 @@ func decodeLuaResult(L *lua.LState) (luaScriptResult, error) {
 	luaData, ok := L.Get(2).(*lua.LTable)
 	if !ok {
 		return luaScriptResult{}, fmt.Errorf("Lua script success data must be a table")
+	}
+	if luaData.RawGetString("items") != lua.LNil {
+		payload, err := decodeCollection(luaData)
+		return luaScriptResult{Collection: payload}, err
 	}
 
 	stars, err := parseStarCount(luaData.RawGetString("stars").String())
@@ -425,12 +447,40 @@ func parseStarCount(raw string) (int, error) {
 	return int(math.Round(stars * multiplier)), nil
 }
 
+// domCache is deliberately task-local and holds only the latest HTML value.
+// It is not a process-wide cache: documents disappear with the Lua VM after
+// the task completes, so different targets cannot leak state into one another.
+type domCache struct {
+	html string
+	doc  *goquery.Document
+}
+
+func newDOMCache() *domCache {
+	return &domCache{}
+}
+
+func (cache *domCache) document(html string) (*goquery.Document, error) {
+	if cache.doc != nil && cache.html == html {
+		return cache.doc, nil
+	}
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, err
+	}
+	cache.html, cache.doc = html, doc
+	return doc, nil
+}
+
 func HtmlFind(L *lua.LState) int {
+	return newDOMCache().htmlFind(L)
+}
+
+func (cache *domCache) htmlFind(L *lua.LState) int {
 	// html_find(html, selector) 负责将 HTML 解析和 CSS 选择器能力提供给 Lua。
 	// 与 http_get 一样，失败时返回 nil 和错误信息，成功时返回第一个匹配元素的文本。
 	htmlstr := L.CheckString(1)
 	selector := L.CheckString(2)
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlstr))
+	doc, err := cache.document(htmlstr)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString("DOM树构建失败: " + err.Error()))
@@ -450,17 +500,25 @@ func HtmlFind(L *lua.LState) int {
 }
 
 func HtmlFindAll(L *lua.LState) int {
-	return htmlSelectAll(L, "")
+	return newDOMCache().htmlFindAll(L)
 }
 
 func HtmlAttrAll(L *lua.LState) int {
-	return htmlSelectAll(L, L.CheckString(3))
+	return newDOMCache().htmlAttrAll(L)
 }
 
-func htmlSelectAll(L *lua.LState, attribute string) int {
+func (cache *domCache) htmlFindAll(L *lua.LState) int {
+	return cache.htmlSelectAll(L, "")
+}
+
+func (cache *domCache) htmlAttrAll(L *lua.LState) int {
+	return cache.htmlSelectAll(L, L.CheckString(3))
+}
+
+func (cache *domCache) htmlSelectAll(L *lua.LState, attribute string) int {
 	htmlText := L.CheckString(1)
 	selector := L.CheckString(2)
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(htmlText))
+	doc, err := cache.document(htmlText)
 	if err != nil {
 		L.Push(lua.LNil)
 		L.Push(lua.LString(err.Error()))

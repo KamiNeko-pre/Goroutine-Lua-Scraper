@@ -1,32 +1,66 @@
-# 数据库文件 (绝对不能上传)
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+configs/*local*
+
+# Runtime data, logs, profiles and coverage output
 *.db
 *.sqlite
-data.db
+*.sqlite3
+*.log
+*.pid
+*.out
+*.prof
+coverage.out
+coverage.html
+test-results/
 
-# 编译生成的可执行文件 (Windows 环境)
-*.exe
+# Build output and local binaries
 /build/
+/dist/
+*.exe
+*.test
 
-# 依赖包目录与临时文件
-/vendor/
+# Operating system and editor files
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
 
-# AI 工具配置与缓存（不上传）
-.agents/
-.claude/
-.codegraph/
-.gemini/
-.reasonix/
-reasonix.toml
+# Agent workspaces and private local tooling
+/.agents/
+/.claude/
+/.codegraph/
+/.gemini/
+/.reasonix/
+/.superpowers/
+/.worktrees/
+/reasonix.toml
+/skills-lock.json
 
-# 项目开发文档（本地参考用，不上传）
-temp/
-.agents/.deps/
-
-# 本地求职材料、生成产物与设计预览
+# Private plans, raw benchmark captures and local verification artifacts
+/docs/
+/deploy/
 /output/
 /tmp/
-/.superpowers/
-/scripts/resume/
-/skills-lock.json
+/temp/
+/PRODUCT.md
 /开发流程.txt
+/scripts/resume/
+/scripts/deadloop.lua
+/scripts/test.lua
+/cmd/benchmark-mock/
+/cmd/benchmark-final/
+/cmd/closure-drill/
+/docker-compose.benchmark.yml
+/docker-compose.final.yml
+/web/README.md
+/web/verify-live.cjs

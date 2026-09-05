@@ -112,11 +112,13 @@ function itemKey(item, rule) {
 }
 
 function comparableItem(item) {
-  return JSON.stringify({
-    title: item?.title ?? item?.name ?? item?.full_name ?? "",
-    rank: item?.rank ?? null,
-    score: item?.score ?? item?.stars ?? item?.points ?? null
-  });
+  return stableJSON(item);
+}
+
+export function stableJSON(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJSON).join(",")}]`;
+  if (value && typeof value === "object") return `{${Object.keys(value).sort().map(key => `${JSON.stringify(key)}:${stableJSON(value[key])}`).join(",")}}`;
+  return JSON.stringify(value);
 }
 
 export function compareSnapshots(previous, current, rule = {}) {
@@ -229,6 +231,9 @@ export function evaluateRuleHealth(snapshots, rule = {}, now = new Date()) {
   if (latest.status !== SUCCESS_STATUS) {
     status = "failing";
     reason = latest.lastError || latest.failureCode || "最近一次运行失败";
+  } else if (latest.parseError) {
+    status = "failing";
+    reason = `结果解析失败：${latest.parseError.message}`;
   } else if (age > interval * 2) {
     status = "failing";
     reason = "最近一次成功快照已明显过期";
@@ -259,6 +264,27 @@ function dateBucket(value) {
     return "未知";
   }
   return date.toISOString().slice(5, 10);
+}
+
+export function buildTrendStats(trend = []) {
+  const ordered = [...trend].sort((left, right) => left.bucket.localeCompare(right.bucket));
+  const latest = ordered.at(-1) ?? null;
+  const previous = ordered.at(-2) ?? null;
+  const latestCount = Number(latest?.itemCount ?? 0);
+  const previousCount = Number(previous?.itemCount ?? 0);
+  const delta = latest && previous ? latestCount - previousCount : 0;
+  const deltaRate = previousCount > 0 ? (delta / previousCount) * 100 : null;
+  const changeCount = Number(latest?.changeCount ?? 0);
+
+  return {
+    latestBucket: latest?.bucket ?? null,
+    latestCount,
+    previousCount,
+    delta,
+    deltaRate,
+    changeCount,
+    changeRate: latestCount > 0 ? (changeCount / latestCount) * 100 : 0
+  };
 }
 
 export function buildOverview(snapshots, rules, now = new Date()) {
@@ -314,7 +340,7 @@ export function buildOverview(snapshots, rules, now = new Date()) {
     __taskId: snapshot.taskId,
     __ruleId: snapshot.ruleId,
     __finishedAt: snapshot.finishedAt
-  }))).slice(0, 40);
+  })));
 
   const sourceList = [...sourceMap.values()]
     .map((source) => ({ ...source, ruleIds: [...source.ruleIds] }))
@@ -336,5 +362,69 @@ export function buildOverview(snapshots, rules, now = new Date()) {
     health,
     changes: changes.sort((left, right) => (timestamp(right.finishedAt) ?? 0) - (timestamp(left.finishedAt) ?? 0)),
     latestItems
+  };
+}
+
+export function buildInsightBrief(overview, rules = []) {
+  const summary = overview?.summary ?? {};
+  const changes = overview?.changes ?? [];
+  const health = overview?.health ?? [];
+  const sources = overview?.sources ?? [];
+  const ruleById = new Map((rules ?? []).map((rule) => [rule.id, rule]));
+  const changeByRule = new Map();
+
+  for (const change of changes) {
+    const total = change.added.length + change.removed.length + change.changed.length;
+    const current = changeByRule.get(change.ruleId) ?? 0;
+    changeByRule.set(change.ruleId, current + total);
+  }
+
+  const leadingChange = [...changeByRule.entries()]
+    .sort((left, right) => right[1] - left[1])[0];
+  const leadingRule = leadingChange ? ruleById.get(leadingChange[0]) : null;
+  const attention = health
+    .filter((entry) => entry.status === "failing" || entry.status === "degraded")
+    .sort((left, right) => {
+      if (left.status === right.status) return 0;
+      return left.status === "failing" ? -1 : 1;
+    })[0] ?? null;
+  const attentionRule = attention ? ruleById.get(attention.ruleId) : null;
+  const trend = buildTrendStats(overview?.trend ?? []);
+  const topSource = sources[0] ?? null;
+  const sourceCount = sources.length;
+  const itemCount = Number(summary.itemCount ?? 0);
+  const failedRuns = Number(summary.failedRuns ?? 0);
+
+  let headline = "当前窗口还没有足够的快照形成变化结论。";
+  if (attention && attention.status === "failing") {
+    headline = `${attentionRule?.name ?? attention.ruleId} 最近一次运行失败，建议先检查规则健康。`;
+  } else if (leadingChange) {
+    headline = `${leadingRule?.name ?? leadingChange[0]} 出现 ${leadingChange[1]} 项变化，是当前窗口最值得查看的信号。`;
+  } else if (failedRuns > 0) {
+    headline = `当前窗口有 ${failedRuns} 次失败运行，虽然最近结果已恢复，也建议检查失败记录。`;
+  } else if (topSource) {
+    headline = `${topSource.source} 贡献了当前窗口最多的有效数据，采集结果暂未出现明显变化。`;
+  }
+
+  const attentionDetail = attention
+    ? `${attentionRule?.name ?? attention.ruleId}：${attention.reason}`
+    : failedRuns > 0 ? "存在历史失败运行，建议查看运行追踪" : "当前窗口没有失败运行";
+
+  return {
+    headline,
+    scope: `${Number(summary.runCount ?? 0)} 次运行 · ${sourceCount} 个来源`,
+    movement: {
+      value: leadingRule?.name ?? "暂无明显变化",
+      detail: leadingChange ? `${leadingChange[1]} 项新增、下线或字段变化` : "需要至少两次成功快照"
+    },
+    coverage: {
+      value: `${sourceCount} 个来源`,
+      detail: `${itemCount} 条有效数据 · ${Number(summary.successfulRuns ?? 0)} 次成功运行`
+    },
+    attention: {
+      value: failedRuns > 0 ? `${failedRuns} 次失败` : attention ? "规则需关注" : "运行稳定",
+      detail: attentionDetail
+    },
+    trend
   };
 }
